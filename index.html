@@ -1,0 +1,777 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vocab Trainer · EN / DE</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root {
+    --primary:      #4f46e5;
+    --primary-dark: #3730a3;
+    --success:      #10b981;
+    --danger:       #ef4444;
+    --bg:           #f1f5f9;
+    --text:         #1e293b;
+    --muted:        #64748b;
+    --border:       #e2e8f0;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text); min-height: 100vh;
+  }
+
+  /* ── Header ── */
+  header {
+    background: var(--primary); color: white;
+    padding: .9rem 1.5rem;
+    display: flex; align-items: center; justify-content: space-between;
+    box-shadow: 0 2px 8px rgba(0,0,0,.2);
+  }
+  header h1    { font-size: 1.2rem; font-weight: 700; }
+  header .meta { font-size: .8rem; opacity: .8; }
+
+  /* ── Nav ── */
+  nav {
+    background: white; border-bottom: 1px solid var(--border);
+    display: flex; padding: 0 1.25rem; gap: .1rem;
+  }
+  nav button {
+    padding: .85rem 1.1rem; background: none;
+    border: none; border-bottom: 3px solid transparent;
+    cursor: pointer; font-size: .9rem; color: var(--muted);
+    transition: all .15s; white-space: nowrap;
+  }
+  nav button.active { color: var(--primary); border-bottom-color: var(--primary); font-weight: 600; }
+  nav button:hover:not(.active) { color: var(--text); }
+
+  main { max-width: 720px; margin: 0 auto; padding: 1.5rem 1.25rem; }
+
+  /* ── Screens ── */
+  .screen { display: none; }
+  .screen.active { display: block; }
+  .tab { display: none; }
+  .tab.active { display: block; }
+
+  /* ── Centered screen ── */
+  .center-screen {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; min-height: 65vh; text-align: center; gap: .9rem;
+  }
+  .center-screen .icon { font-size: 3.5rem; }
+  .center-screen h2   { font-size: 1.8rem; font-weight: 700; }
+  .center-screen p    { color: var(--muted); max-width: 360px; line-height: 1.65; }
+
+  /* ── Buttons ── */
+  .btn {
+    padding: .65rem 1.3rem; border-radius: 9px; border: none;
+    cursor: pointer; font-size: .9rem; font-weight: 600;
+    transition: all .15s; display: inline-flex; align-items: center; gap: .35rem;
+  }
+  .btn-primary { background: var(--primary); color: white; }
+  .btn-primary:hover { background: var(--primary-dark); }
+  .btn-success { background: var(--success); color: white; }
+  .btn-success:hover { filter: brightness(1.08); }
+  .btn-danger  { background: var(--danger);  color: white; }
+  .btn-danger:hover  { filter: brightness(1.08); }
+  .btn-outline {
+    background: white; color: var(--primary);
+    border: 2px solid var(--primary);
+  }
+  .btn-outline:hover { background: #f0f4ff; }
+  .btn-ghost { background: none; border: none; color: var(--muted); cursor: pointer; font-size: .88rem; }
+  .btn-ghost:hover { color: var(--text); }
+
+  /* ── Sheet selector ── */
+  .sheet-grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: .75rem; margin-top: 1rem;
+  }
+  .sheet-card {
+    background: white; border: 2px solid var(--border);
+    border-radius: 12px; padding: 1rem 1.1rem;
+    cursor: pointer; transition: all .15s;
+    text-align: left;
+  }
+  .sheet-card:hover { border-color: var(--primary); box-shadow: 0 2px 12px rgba(79,70,229,.12); }
+  .sheet-card h3 { font-size: .95rem; font-weight: 700; margin-bottom: .25rem; }
+  .sheet-card p  { font-size: .8rem; color: var(--muted); }
+  .sheet-card .badge {
+    display: inline-block; background: #e0e7ff; color: #3730a3;
+    font-size: .72rem; font-weight: 700; padding: .15rem .5rem;
+    border-radius: 99px; margin-bottom: .4rem;
+  }
+
+  /* ── Flashcard ── */
+  .filter-row { display: flex; gap: .45rem; flex-wrap: wrap; align-items: center; margin-bottom: 1.1rem; }
+  .chip {
+    padding: .3rem .85rem; border-radius: 99px;
+    border: 1.5px solid var(--border); background: white;
+    cursor: pointer; font-size: .8rem; color: var(--muted); transition: all .15s;
+  }
+  .chip.active { background: var(--primary); color: white; border-color: var(--primary); }
+  .chip:hover:not(.active) { border-color: var(--primary); color: var(--primary); }
+
+  .progress-text { text-align: center; font-size: .8rem; color: var(--muted); margin-bottom: .35rem; }
+  .progress-bar  { background: var(--border); border-radius: 99px; height: 6px; overflow: hidden; margin-bottom: 1.1rem; }
+  .progress-fill { height: 100%; background: var(--primary); border-radius: 99px; transition: width .3s; }
+
+  .card-wrap {
+    perspective: 1000px; height: 250px;
+    margin-bottom: 1.1rem; cursor: pointer; user-select: none;
+  }
+  .card {
+    width: 100%; height: 100%; position: relative;
+    transform-style: preserve-3d;
+    transition: transform .42s cubic-bezier(.4,0,.2,1);
+    border-radius: 16px;
+  }
+  .card.flipped { transform: rotateY(180deg); }
+  .face {
+    position: absolute; inset: 0; backface-visibility: hidden;
+    border-radius: 16px; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; padding: 1.5rem;
+    box-shadow: 0 4px 20px rgba(0,0,0,.08);
+  }
+  .face-front { background: white; }
+  .face-back  { background: #eef2ff; transform: rotateY(180deg); }
+
+  .face-label  { font-size: .72rem; font-weight: 700; letter-spacing: .07em;
+                 text-transform: uppercase; color: var(--muted); position: absolute; top: 1rem; }
+  .face-word   { font-size: 1.9rem; font-weight: 700; text-align: center; line-height: 1.2; }
+  .face-trans  { font-size: 1.45rem; font-weight: 700; color: var(--primary); text-align: center; margin-bottom: .2rem; }
+  .face-type   { font-size: .75rem; background: #e0e7ff; color: #3730a3;
+                 padding: .15rem .5rem; border-radius: 99px; margin-top: .35rem; }
+  .face-extra  { font-size: .8rem; color: var(--muted); text-align: center; margin-top: .35rem;
+                 line-height: 1.5; max-width: 92%; font-style: italic; }
+  .face-hint   { font-size: .75rem; color: var(--muted); position: absolute; bottom: .9rem; }
+
+  .controls { display: flex; gap: .6rem; justify-content: center; flex-wrap: wrap; }
+
+  /* ── Done screen ── */
+  .done-screen {
+    background: white; border-radius: 16px;
+    padding: 2.5rem 1.5rem; text-align: center;
+    box-shadow: 0 4px 20px rgba(0,0,0,.07);
+  }
+  .score-ring {
+    width: 100px; height: 100px; border-radius: 50%;
+    background: var(--primary); color: white;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center; margin: 0 auto 1.25rem;
+  }
+  .score-ring .pct { font-size: 1.8rem; font-weight: 700; line-height: 1; }
+  .score-ring .lbl { font-size: .68rem; opacity: .8; }
+  .done-screen h2  { font-size: 1.6rem; margin-bottom: .5rem; }
+  .done-screen p   { color: var(--muted); margin-bottom: 1.5rem; }
+
+  /* ── Add word form ── */
+  .form-card { background: white; border-radius: 16px; padding: 1.75rem; box-shadow: 0 4px 20px rgba(0,0,0,.06); }
+  .form-card h2 { font-size: 1.2rem; margin-bottom: 1.25rem; }
+  .form-row  { display: grid; grid-template-columns: 1fr 1fr; gap: .85rem; }
+  .form-group { margin-bottom: 1rem; }
+  label {
+    display: block; font-size: .74rem; font-weight: 700;
+    color: var(--muted); text-transform: uppercase;
+    letter-spacing: .07em; margin-bottom: .3rem;
+  }
+  input[type=text], textarea {
+    width: 100%; padding: .65rem .9rem;
+    border: 1.5px solid var(--border); border-radius: 8px;
+    font-size: .93rem; font-family: inherit;
+    transition: border-color .15s; background: #fafafa;
+  }
+  input[type=text]:focus, textarea:focus { outline: none; border-color: var(--primary); background: white; }
+  textarea { resize: vertical; min-height: 68px; }
+  .toast { padding: .65rem .9rem; border-radius: 8px; margin-top: .9rem; font-size: .88rem; display: none; }
+  .toast.ok  { background: #d1fae5; color: #065f46; }
+  .toast.err { background: #fee2e2; color: #991b1b; }
+
+  /* ── Word list ── */
+  .search-row { display: flex; gap: .65rem; margin-bottom: .9rem; }
+  .search-bar {
+    flex: 1; padding: .65rem .9rem; border: 1.5px solid var(--border);
+    border-radius: 8px; font-size: .93rem; background: white;
+  }
+  .search-bar:focus { outline: none; border-color: var(--primary); }
+  .word-table-wrap { background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 2px 12px rgba(0,0,0,.05); }
+  .word-table { width: 100%; border-collapse: collapse; }
+  .word-table th { background: var(--primary); color: white; padding: .6rem .9rem; text-align: left; font-size: .75rem; text-transform: uppercase; letter-spacing: .07em; }
+  .word-table td { padding: .6rem .9rem; border-bottom: 1px solid var(--border); font-size: .86rem; }
+  .word-table tr:last-child td { border-bottom: none; }
+  .word-table tr:hover td { background: #f8fafc; }
+  .badge-sm { padding: .15rem .45rem; border-radius: 99px; font-size: .7rem; font-weight: 700; }
+  .badge-learned { background: #d1fae5; color: #065f46; }
+  .badge-new     { background: #e0e7ff; color: #3730a3; }
+  .list-info { font-size: .8rem; color: var(--muted); margin-bottom: .6rem; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🇺🇸 Vocab Trainer</h1>
+  <div class="meta" id="headerMeta">No file loaded</div>
+</header>
+
+<!-- ══ SCREEN: Open file ══ -->
+<div id="screenOpen" class="screen active">
+  <div class="center-screen" style="padding:2rem;">
+    <div class="icon">📚</div>
+    <h2>Vocabulary Trainer</h2>
+    <p>Open your <strong>English_Deutsch.xlsx</strong> file. The app reads all your sheets, lets you practice with flashcards, and saves new words back to the file.</p>
+    <label for="fileInput" class="btn btn-primary" style="font-size:1rem;padding:.85rem 1.8rem;margin-top:.5rem;cursor:pointer;">
+      Open Excel file
+    </label>
+    <input type="file" id="fileInput" accept=".xlsx" style="display:none;" onchange="onFileChosen(this)">
+    <p style="font-size:.76rem;color:#94a3b8;">Works in any browser</p>
+  </div>
+</div>
+
+<!-- ══ SCREEN: Sheet selector ══ -->
+<div id="screenSheets" class="screen">
+  <main>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+      <div>
+        <h2 style="font-size:1.3rem;font-weight:700;">Choose a sheet to study</h2>
+        <p style="font-size:.85rem;color:var(--muted);margin-top:.2rem;" id="sheetSubtitle"></p>
+      </div>
+      <label for="fileInput2" class="btn btn-ghost" style="cursor:pointer;">↩ Open other file</label>
+      <input type="file" id="fileInput2" accept=".xlsx" style="display:none;" onchange="onFileChosen(this)">
+    </div>
+    <div class="sheet-grid" id="sheetGrid"></div>
+  </main>
+</div>
+
+<!-- ══ SCREEN: App (nav + tabs) ══ -->
+<div id="screenApp" class="screen">
+  <nav>
+    <button class="btn-ghost" onclick="goBackToSheets()" style="font-size:.85rem;padding:.85rem .7rem;">← Sheets</button>
+    <button class="active" onclick="showTab('flashcards',this)">🃏 Flashcards</button>
+    <button onclick="showTab('addWord',this)">➕ Add Word</button>
+    <button onclick="showTab('wordList',this)">📋 Word List</button>
+  </nav>
+
+  <main>
+
+    <!-- ─ FLASHCARDS TAB ─ -->
+    <div id="tab-flashcards" class="tab active">
+      <div class="filter-row">
+        <button class="chip active" onclick="setFilter('all',this)">All</button>
+        <button class="chip" onclick="setFilter('unlearned',this)">Not learned</button>
+        <button class="chip" onclick="setFilter('learned',this)">Learned</button>
+        <button class="chip" style="margin-left:auto;" onclick="shuffleAndStart()">🔀 Shuffle</button>
+      </div>
+
+      <div id="flashcardArea">
+        <div class="progress-text" id="progressText">Card 1 of 0</div>
+        <div class="progress-bar"><div class="progress-fill" id="progressFill" style="width:0%"></div></div>
+
+        <div class="card-wrap" onclick="flipCard()">
+          <div class="card" id="flashcard">
+            <div class="face face-front">
+              <span class="face-label">🇺🇸 English</span>
+              <div class="face-word" id="cardFront">—</div>
+              <span class="face-hint">Click card to reveal answer</span>
+            </div>
+            <div class="face face-back">
+              <span class="face-label" id="cardBackLabel">🇩🇪 German</span>
+              <div class="face-trans" id="cardBack"></div>
+              <div class="face-type"  id="cardType"  style="display:none;"></div>
+              <div class="face-extra" id="cardExtra"></div>
+              <span class="face-hint">Click card to flip back</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="controls" style="margin-bottom:.6rem;">
+          <button class="btn btn-danger"  onclick="markCard(false)">✗ Missed</button>
+          <button class="btn btn-outline" onclick="flipCard()">↩ Flip</button>
+          <button class="btn btn-success" onclick="markCard(true)">✓ Got it</button>
+        </div>
+        <div class="controls">
+          <button class="btn btn-outline" style="padding:.45rem .9rem;font-size:.82rem;" onclick="prevCard()">← Prev</button>
+          <button class="btn btn-outline" style="padding:.45rem .9rem;font-size:.82rem;" onclick="nextCard()">Next →</button>
+        </div>
+      </div>
+
+      <div id="doneScreen" class="done-screen" style="display:none;">
+        <div class="score-ring">
+          <div class="pct" id="scorePct">0%</div>
+          <div class="lbl">correct</div>
+        </div>
+        <h2>Round complete! 🎉</h2>
+        <p id="scoreDetail"></p>
+        <div class="controls">
+          <button class="btn btn-primary" onclick="restartRound()">Play again</button>
+          <button class="btn btn-outline" onclick="reviewMissed()">Review missed</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─ ADD WORD TAB ─ -->
+    <div id="tab-addWord" class="tab">
+      <div class="form-card">
+        <h2>Add new word</h2>
+        <div class="form-row">
+          <div class="form-group">
+            <label>English word / phrase *</label>
+            <input type="text" id="fEn" placeholder="e.g. ephemeral" autocomplete="off">
+          </div>
+          <div class="form-group">
+            <label>German translation *</label>
+            <input type="text" id="fDe" placeholder="e.g. vergänglich">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Part of speech</label>
+          <input type="text" id="fType" placeholder="e.g. adjective, verb, idiom">
+        </div>
+        <div class="form-group">
+          <label>Example sentence</label>
+          <textarea id="fEx" placeholder="e.g. The beauty of cherry blossoms is ephemeral."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Meaning &amp; similar words</label>
+          <input type="text" id="fMean" placeholder="e.g. fleeting, transient, short-lived">
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <textarea id="fNotes" placeholder="e.g. Literary/formal. Often used for beauty or fame." style="min-height:56px;"></textarea>
+        </div>
+        <button class="btn btn-primary" onclick="saveWord()" style="width:100%;justify-content:center;">
+          Save to Excel file
+        </button>
+        <div class="toast ok"  id="toastOk"></div>
+        <div class="toast err" id="toastErr"></div>
+      </div>
+    </div>
+
+    <!-- ─ WORD LIST TAB ─ -->
+    <div id="tab-wordList" class="tab">
+      <div class="search-row">
+        <input type="text" class="search-bar" id="searchInput" placeholder="🔍 Search words…" oninput="renderWordList()">
+        <button class="btn btn-outline" style="white-space:nowrap;" onclick="downloadFile()">⬇ Save file</button>
+      </div>
+      <div class="list-info" id="listInfo"></div>
+      <div class="word-table-wrap">
+        <table class="word-table">
+          <thead>
+            <tr>
+              <th>English</th><th>German / Answer</th><th>Type</th><th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="wordTableBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+</div><!-- #screenApp -->
+
+
+<script>
+/* ═══════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════ */
+let fileName     = 'English_Deutsch.xlsx';
+let workbook     = null;
+let allWords     = [];
+let filteredWords= [];
+let currentIndex = 0;
+let flipped      = false;
+let correct      = 0;
+let filter       = 'all';
+let missedWords  = [];
+let currentSheet = '';
+
+const learned = new Set(JSON.parse(localStorage.getItem('vocab_learned') || '[]'));
+
+/* ═══════════════════════════════════════════════
+   FILE LOADING
+═══════════════════════════════════════════════ */
+async function onFileChosen(input) {
+  if (!input.files[0]) return;
+  fileName = input.files[0].name;
+  const buf = await input.files[0].arrayBuffer();
+  workbook  = XLSX.read(buf, { type: 'array' });
+  showSheetSelector();
+}
+
+/* ═══════════════════════════════════════════════
+   SHEET SELECTOR
+═══════════════════════════════════════════════ */
+function showSheetSelector() {
+  // Analyse each sheet
+  const sheets = workbook.SheetNames.map(name => {
+    const sheet  = workbook.Sheets[name];
+    const data   = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    const cols   = detectColumns(data);
+    const words  = parseWords(data, cols);
+    return { name, count: words.length };
+  }).filter(s => s.count >= 2);
+
+  const total = sheets.reduce((a, b) => a + b.count, 0);
+  document.getElementById('sheetSubtitle').textContent =
+    `${sheets.length} sheets · ${total.toLocaleString()} words total`;
+
+  const grid = document.getElementById('sheetGrid');
+  grid.innerHTML = '';
+
+  // "All sheets" card
+  const allCard = makeSheetCard('📚 All sheets combined', `${total.toLocaleString()} words`, 'all', null);
+  grid.appendChild(allCard);
+
+  sheets.forEach(s => {
+    const icon = sheetIcon(s.name);
+    const card = makeSheetCard(icon + ' ' + titleCase(s.name), `${s.count} words`, s.name, s.name);
+    grid.appendChild(card);
+  });
+
+  showScreen('screenSheets');
+  document.getElementById('headerMeta').textContent = fileName;
+}
+
+function makeSheetCard(title, subtitle, sheetKey, sheetName) {
+  const div = document.createElement('div');
+  div.className = 'sheet-card';
+  div.innerHTML = `<h3>${title}</h3><p>${subtitle}</p>`;
+  div.onclick = () => loadSheet(sheetKey, sheetName);
+  return div;
+}
+
+function loadSheet(sheetKey, sheetName) {
+  currentSheet = sheetName || 'All';
+
+  if (sheetKey === 'all') {
+    // Combine all sheets
+    allWords = [];
+    workbook.SheetNames.forEach(name => {
+      const sheet = workbook.Sheets[name];
+      const data  = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      const cols  = detectColumns(data);
+      const words = parseWords(data, cols);
+      allWords.push(...words);
+    });
+    // Deduplicate by english
+    const seen = new Set();
+    allWords = allWords.filter(w => {
+      const key = w.english.toLowerCase().trim();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  } else {
+    const sheet = workbook.Sheets[sheetName];
+    const data  = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+    const cols  = detectColumns(data);
+    allWords    = parseWords(data, cols);
+  }
+
+  document.getElementById('headerMeta').textContent =
+    `${currentSheet} · ${allWords.length} words`;
+
+  showScreen('screenApp');
+  // Reset nav to flashcards
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.querySelector('nav button:nth-child(2)').classList.add('active');
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-flashcards').classList.add('active');
+
+  filter = 'all';
+  document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  document.querySelector('.chip').classList.add('active');
+  applyFilter();
+}
+
+/* ═══════════════════════════════════════════════
+   COLUMN DETECTION  (SheetJS starts from first used column, not always A)
+═══════════════════════════════════════════════ */
+function detectColumns(data) {
+  let englishCol = 0, germanCol = 1, typeCol = -1, extraCol = -1;
+  let startRow   = 0;
+
+  const EN_HEADERS = ['english', 'phrasal verb', 'conjunction', 'word', 'phrase', 'verb', 'adjective', 'adverb', 'noun'];
+  const DE_HEADERS = ['german', 'deutsch', 'german translation', 'translation'];
+  const TY_HEADERS = ['type', 'part of speech'];
+  const EX_HEADERS = ['explanation', 'meaning', 'example', 'notes', 'description'];
+
+  for (let i = 0; i < Math.min(6, data.length); i++) {
+    const row = data[i];
+    let foundEn = false;
+    for (let j = 0; j < row.length; j++) {
+      const v = String(row[j] || '').toLowerCase().trim();
+      if (!v) continue;
+      if (EN_HEADERS.some(k => v === k)) { englishCol = j; foundEn = true; startRow = i + 1; }
+      if (DE_HEADERS.some(k => v === k)) { germanCol  = j; }
+      if (TY_HEADERS.some(k => v === k)) { typeCol    = j; }
+      if (EX_HEADERS.some(k => v === k) && typeCol < 0) { extraCol = j; }
+    }
+    if (foundEn) break;
+  }
+
+  return { englishCol, germanCol, typeCol, extraCol, startRow };
+}
+
+/* ═══════════════════════════════════════════════
+   PARSE WORDS FROM SHEET DATA
+═══════════════════════════════════════════════ */
+function parseWords(data, cols) {
+  const { englishCol, germanCol, typeCol, extraCol, startRow } = cols;
+  const SKIP = new Set(['english', 'phrasal verb', 'conjunction', 'word', 'type', 'german', 'translation']);
+  const words = [];
+
+  for (let i = startRow; i < data.length; i++) {
+    const row     = data[i];
+    const english = String(row[englishCol] || '').trim();
+    const german  = String(row[germanCol]  || '').trim();
+
+    if (!english || english.length < 2) continue;
+    if (SKIP.has(english.toLowerCase())) continue;
+    // Skip rows that look like continuation notes (no English, only German)
+    if (!english.match(/[a-zA-ZäöüÄÖÜ]/)) continue;
+
+    words.push({
+      english,
+      german,
+      type:  typeCol  >= 0 ? String(row[typeCol]  || '').trim() : '',
+      extra: extraCol >= 0 ? String(row[extraCol] || '').trim() : '',
+      isNew: false
+    });
+  }
+  return words;
+}
+
+/* ═══════════════════════════════════════════════
+   NAVIGATION
+═══════════════════════════════════════════════ */
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+}
+
+function showTab(name, btn) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  btn.classList.add('active');
+  if (name === 'wordList') renderWordList();
+}
+
+function goBackToSheets() { showSheetSelector(); }
+
+/* ═══════════════════════════════════════════════
+   FLASHCARD LOGIC
+═══════════════════════════════════════════════ */
+function setFilter(f, btn) {
+  filter = f;
+  document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  btn.classList.add('active');
+  applyFilter();
+}
+
+function applyFilter() {
+  if      (filter === 'all')      filteredWords = [...allWords];
+  else if (filter === 'unlearned') filteredWords = allWords.filter(w => !learned.has(w.english));
+  else if (filter === 'learned')   filteredWords = allWords.filter(w =>  learned.has(w.english));
+  else if (filter === 'missed')    filteredWords = [...missedWords];
+  currentIndex = 0; correct = 0; flipped = false; missedWords = [];
+  document.getElementById('doneScreen').style.display     = 'none';
+  document.getElementById('flashcardArea').style.display  = 'block';
+  showCard();
+}
+
+function shuffleAndStart() {
+  for (let i = filteredWords.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [filteredWords[i], filteredWords[j]] = [filteredWords[j], filteredWords[i]];
+  }
+  currentIndex = 0; correct = 0; flipped = false; missedWords = [];
+  document.getElementById('doneScreen').style.display    = 'none';
+  document.getElementById('flashcardArea').style.display = 'block';
+  showCard();
+}
+
+function showCard() {
+  if (!filteredWords.length) {
+    document.getElementById('cardFront').textContent = 'No words in this filter';
+    document.getElementById('cardBack').textContent  = '';
+    document.getElementById('progressText').textContent = '0 / 0';
+    document.getElementById('progressFill').style.width = '0%';
+    return;
+  }
+  const w = filteredWords[currentIndex];
+  document.getElementById('cardFront').textContent = w.english;
+  document.getElementById('cardBack').textContent  = w.german  || '(no translation)';
+
+  const typeEl = document.getElementById('cardType');
+  if (w.type) { typeEl.textContent = w.type; typeEl.style.display = 'inline-block'; }
+  else        { typeEl.style.display = 'none'; }
+
+  document.getElementById('cardExtra').textContent = w.extra || '';
+  document.getElementById('flashcard').classList.remove('flipped');
+  flipped = false;
+
+  const pct = (currentIndex / filteredWords.length) * 100;
+  document.getElementById('progressFill').style.width  = pct + '%';
+  document.getElementById('progressText').textContent  =
+    `Card ${currentIndex + 1} of ${filteredWords.length}`;
+}
+
+function flipCard() {
+  flipped = !flipped;
+  document.getElementById('flashcard').classList.toggle('flipped', flipped);
+}
+
+function markCard(wasCorrect) {
+  const w = filteredWords[currentIndex];
+  if (wasCorrect) { correct++; learned.add(w.english); }
+  else            { missedWords.push(w); learned.delete(w.english); }
+  localStorage.setItem('vocab_learned', JSON.stringify([...learned]));
+  nextCard();
+}
+
+function nextCard() {
+  if (currentIndex < filteredWords.length - 1) { currentIndex++; showCard(); }
+  else showDone();
+}
+function prevCard() {
+  if (currentIndex > 0) { currentIndex--; showCard(); }
+}
+
+function showDone() {
+  document.getElementById('flashcardArea').style.display = 'none';
+  document.getElementById('doneScreen').style.display    = 'block';
+  const pct = filteredWords.length ? Math.round((correct / filteredWords.length) * 100) : 0;
+  document.getElementById('scorePct').textContent    = pct + '%';
+  document.getElementById('scoreDetail').textContent =
+    `You got ${correct} of ${filteredWords.length} words correct.`;
+}
+function restartRound() {
+  document.getElementById('doneScreen').style.display    = 'none';
+  document.getElementById('flashcardArea').style.display = 'block';
+  currentIndex = 0; correct = 0;
+  shuffleAndStart();
+}
+function reviewMissed() {
+  if (!missedWords.length) { alert('No missed words — great job!'); return; }
+  filter = 'missed';
+  document.querySelectorAll('.chip').forEach(c => c.classList.remove('active'));
+  filteredWords = [...missedWords]; missedWords = [];
+  document.getElementById('doneScreen').style.display    = 'none';
+  document.getElementById('flashcardArea').style.display = 'block';
+  currentIndex = 0; correct = 0; flipped = false;
+  showCard();
+}
+
+/* ═══════════════════════════════════════════════
+   ADD WORD
+═══════════════════════════════════════════════ */
+async function saveWord() {
+  const english = document.getElementById('fEn').value.trim();
+  const german  = document.getElementById('fDe').value.trim();
+  const type    = document.getElementById('fType').value.trim();
+  const example = document.getElementById('fEx').value.trim();
+  const meaning = document.getElementById('fMean').value.trim();
+  const notes   = document.getElementById('fNotes').value.trim();
+
+  if (!english) { showToast('err', 'Please enter an English word.'); return; }
+  if (!german)  { showToast('err', 'Please enter a German translation.'); return; }
+
+  if (allWords.some(w => w.english.toLowerCase() === english.toLowerCase())) {
+    if (!confirm(`"${english}" is already in your list. Add anyway?`)) return;
+  }
+
+  allWords.push({ english, german, type, extra: example, isNew: true });
+
+  // Write to the target sheet (Sheet2 if exists, else first sheet)
+  const targetSheet = workbook.SheetNames.includes('Sheet2') ? 'Sheet2' : workbook.SheetNames[0];
+  const sheet = workbook.Sheets[targetSheet];
+  const data  = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+  data.push(['', english, german, example, meaning, notes]);
+  workbook.Sheets[targetSheet] = XLSX.utils.aoa_to_sheet(data);
+
+  XLSX.writeFile(workbook, fileName);
+
+  ['fEn','fDe','fType','fEx','fMean','fNotes'].forEach(id => {
+    document.getElementById(id).value = '';
+  });
+  document.getElementById('fEn').focus();
+  showToast('ok', `✅ "${english}" added! Updated file downloaded — replace your original with it.`);
+  applyFilter();
+}
+
+function showToast(type, msg) {
+  const ok  = document.getElementById('toastOk');
+  const err = document.getElementById('toastErr');
+  ok.style.display = err.style.display = 'none';
+  const el = type === 'ok' ? ok : err;
+  el.textContent = msg; el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 5000);
+}
+
+/* ═══════════════════════════════════════════════
+   WORD LIST
+═══════════════════════════════════════════════ */
+function renderWordList() {
+  const q = (document.getElementById('searchInput')?.value || '').toLowerCase().trim();
+  const shown = q
+    ? allWords.filter(w =>
+        w.english.toLowerCase().includes(q) ||
+        w.german.toLowerCase().includes(q)  ||
+        (w.extra || '').toLowerCase().includes(q))
+    : allWords;
+
+  const MAX = 300;
+  document.getElementById('listInfo').textContent =
+    `Showing ${Math.min(MAX, shown.length)} of ${shown.length} words`;
+
+  const rows = shown.slice(0, MAX).map(w => `
+    <tr>
+      <td><strong>${esc(w.english)}</strong></td>
+      <td>${esc(w.german)}</td>
+      <td style="color:#6366f1;font-size:.8rem;">${esc(w.type)}</td>
+      <td>
+        ${w.isNew    ? '<span class="badge-sm badge-new">New</span> ' : ''}
+        ${learned.has(w.english) ? '<span class="badge-sm badge-learned">Learned</span>' : ''}
+      </td>
+    </tr>`).join('');
+
+  document.getElementById('wordTableBody').innerHTML = rows ||
+    '<tr><td colspan="4" style="text-align:center;padding:2rem;color:var(--muted);">No words found.</td></tr>';
+}
+
+function esc(s) {
+  return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+function downloadFile() {
+  if (!workbook) { alert('No file loaded.'); return; }
+  XLSX.writeFile(workbook, fileName);
+}
+
+/* ═══════════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════════ */
+function titleCase(s) {
+  return s.replace(/\b\w/g, c => c.toUpperCase());
+}
+function sheetIcon(name) {
+  const n = name.toLowerCase();
+  if (n.includes('phrasal')) return '🔗';
+  if (n.includes('adj'))     return '🎨';
+  if (n.includes('adv'))     return '⚡';
+  if (n.includes('verb'))    return '🏃';
+  if (n.includes('conjun'))  return '🔀';
+  if (n.includes('idiom'))   return '💬';
+  if (n.includes('express')) return '🗣️';
+  if (n.includes('linkedin'))return '💼';
+  if (n.includes('emotion')) return '❤️';
+  if (n.includes('rule'))    return '📏';
+  if (n.includes('german'))  return '🇩🇪';
+  if (n === 'all')           return '📚';
+  return '📝';
+}
+</script>
+</body>
+</html>
