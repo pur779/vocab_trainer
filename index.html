@@ -231,13 +231,15 @@
 <!-- ══ SCREEN: Sheet selector ══ -->
 <div id="screenSheets" class="screen">
   <main>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1rem;gap:1rem;">
       <div>
         <h2 style="font-size:1.3rem;font-weight:700;">Choose a sheet to study</h2>
         <p style="font-size:.85rem;color:var(--muted);margin-top:.2rem;" id="sheetSubtitle"></p>
       </div>
-      <label for="fileInput2" class="btn btn-ghost" style="cursor:pointer;">↩ Open other file</label>
-      <input type="file" id="fileInput2" accept=".xlsx" style="display:none;" onchange="onFileChosen(this)">
+      <label for="fileInput2" class="btn btn-outline" style="cursor:pointer;white-space:nowrap;font-size:.82rem;">
+        🔄 Reload file
+      </label>
+      <input type="file" id="fileInput2" accept=".xlsx" style="display:none;" onchange="clearCache(); onFileChosen(this);">
     </div>
     <div class="sheet-grid" id="sheetGrid"></div>
   </main>
@@ -387,6 +389,36 @@ let currentSheet = '';
 
 const learned = new Set(JSON.parse(localStorage.getItem('vocab_learned') || '[]'));
 
+/* ── On page load: check cache ── */
+window.addEventListener('DOMContentLoaded', () => {
+  const cached = loadCache();
+  if (cached && cached.length > 0) {
+    showSheetSelector(cached);
+  }
+});
+
+/* ═══════════════════════════════════════════════
+   CACHE (localStorage)
+═══════════════════════════════════════════════ */
+const CACHE_KEY = 'vocab_sheets_cache';
+
+function saveCache(sheets) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify(sheets));
+  } catch(e) { /* storage full — skip */ }
+}
+
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch(e) { return null; }
+}
+
+function clearCache() {
+  localStorage.removeItem(CACHE_KEY);
+}
+
 /* ═══════════════════════════════════════════════
    FILE LOADING
 ═══════════════════════════════════════════════ */
@@ -401,15 +433,20 @@ async function onFileChosen(input) {
 /* ═══════════════════════════════════════════════
    SHEET SELECTOR
 ═══════════════════════════════════════════════ */
-function showSheetSelector() {
-  // Analyse each sheet
-  const sheets = workbook.SheetNames.map(name => {
-    const sheet  = workbook.Sheets[name];
-    const data   = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-    const cols   = detectColumns(data);
-    const words  = parseWords(data, cols);
-    return { name, count: words.length };
-  }).filter(s => s.count >= 2);
+function showSheetSelector(sheetsData) {
+  // If sheetsData provided (from cache), use it; otherwise parse from workbook
+  let sheets = sheetsData;
+  if (!sheets) {
+    sheets = workbook.SheetNames.map(name => {
+      const sheet  = workbook.Sheets[name];
+      const data   = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
+      const cols   = detectColumns(data);
+      const words  = parseWords(data, cols);
+      return { name, words, count: words.length };
+    }).filter(s => s.count >= 2);
+    // Save to cache (store words per sheet)
+    saveCache(sheets);
+  }
 
   const total = sheets.reduce((a, b) => a + b.count, 0);
   document.getElementById('sheetSubtitle').textContent =
@@ -418,42 +455,33 @@ function showSheetSelector() {
   const grid = document.getElementById('sheetGrid');
   grid.innerHTML = '';
 
-  // "All sheets" card
-  const allCard = makeSheetCard('📚 All sheets combined', `${total.toLocaleString()} words`, 'all', null);
+  const allCard = makeSheetCard('📚 All sheets combined', `${total.toLocaleString()} words`, 'all', sheets);
   grid.appendChild(allCard);
 
   sheets.forEach(s => {
     const icon = sheetIcon(s.name);
-    const card = makeSheetCard(icon + ' ' + titleCase(s.name), `${s.count} words`, s.name, s.name);
+    const card = makeSheetCard(icon + ' ' + titleCase(s.name), `${s.count} words`, s.name, sheets);
     grid.appendChild(card);
   });
 
   showScreen('screenSheets');
-  document.getElementById('headerMeta').textContent = fileName;
+  document.getElementById('headerMeta').textContent = fileName || 'English_Deutsch.xlsx';
 }
 
-function makeSheetCard(title, subtitle, sheetKey, sheetName) {
+function makeSheetCard(title, subtitle, sheetKey, sheetsData) {
   const div = document.createElement('div');
   div.className = 'sheet-card';
   div.innerHTML = `<h3>${title}</h3><p>${subtitle}</p>`;
-  div.onclick = () => loadSheet(sheetKey, sheetName);
+  div.onclick = () => loadSheet(sheetKey, sheetsData);
   return div;
 }
 
-function loadSheet(sheetKey, sheetName) {
-  currentSheet = sheetName || 'All';
+function loadSheet(sheetKey, sheetsData) {
+  currentSheet = sheetKey === 'all' ? 'All sheets' : sheetKey;
 
   if (sheetKey === 'all') {
-    // Combine all sheets
     allWords = [];
-    workbook.SheetNames.forEach(name => {
-      const sheet = workbook.Sheets[name];
-      const data  = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-      const cols  = detectColumns(data);
-      const words = parseWords(data, cols);
-      allWords.push(...words);
-    });
-    // Deduplicate by english
+    sheetsData.forEach(s => allWords.push(...s.words));
     const seen = new Set();
     allWords = allWords.filter(w => {
       const key = w.english.toLowerCase().trim();
@@ -462,10 +490,8 @@ function loadSheet(sheetKey, sheetName) {
       return true;
     });
   } else {
-    const sheet = workbook.Sheets[sheetName];
-    const data  = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' });
-    const cols  = detectColumns(data);
-    allWords    = parseWords(data, cols);
+    const sheet = sheetsData.find(s => s.name === sheetKey);
+    allWords = sheet ? [...sheet.words] : [];
   }
 
   document.getElementById('headerMeta').textContent =
