@@ -245,11 +245,7 @@
 
 <header>
   <h1>🇺🇸 Vocab Trainer</h1>
-  <div style="display:flex;align-items:center;gap:.75rem;">
-    <div class="meta" id="headerMeta">No file loaded</div>
-    <button onclick="openSettings()" title="Settings"
-      style="background:none;border:none;color:white;font-size:1.2rem;cursor:pointer;opacity:.8;line-height:1;padding:.1rem;">⚙️</button>
-  </div>
+  <div class="meta" id="headerMeta">No file loaded</div>
 </header>
 
 <!-- ══ SETTINGS MODAL ══ -->
@@ -308,6 +304,7 @@
     <button class="active" onclick="showTab('flashcards',this)">🃏 Flashcards</button>
     <button onclick="showTab('addWord',this)">➕ Add Word</button>
     <button onclick="showTab('wordList',this)">📋 Word List</button>
+    <button onclick="openSettings()" style="margin-left:auto;font-size:.85rem;padding:.85rem .7rem;" title="Settings">⚙️ Settings</button>
   </nav>
 
   <main>
