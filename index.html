@@ -205,14 +205,70 @@
   .badge-learned { background: #d1fae5; color: #065f46; }
   .badge-new     { background: #e0e7ff; color: #3730a3; }
   .list-info { font-size: .8rem; color: var(--muted); margin-bottom: .6rem; }
+
+  /* ── Sound button ── */
+  .btn-sound {
+    background: none; border: 2px solid rgba(79,70,229,.35);
+    border-radius: 50%; width: 2.4rem; height: 2.4rem;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 1.1rem; cursor: pointer; transition: all .15s;
+    position: absolute; bottom: .9rem; right: 1rem;
+  }
+  .btn-sound:hover { background: rgba(79,70,229,.1); border-color: var(--primary); }
+  .btn-sound.playing { animation: pulse .6s infinite alternate; border-color: var(--primary); }
+  @keyframes pulse { from { opacity: 1; } to { opacity: .4; } }
+
+  /* ── Settings modal ── */
+  .modal-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.45); z-index: 200;
+    align-items: center; justify-content: center;
+  }
+  .modal-overlay.open { display: flex; }
+  .modal-box {
+    background: white; border-radius: 16px;
+    padding: 2rem; width: min(420px, 92vw);
+    box-shadow: 0 8px 40px rgba(0,0,0,.18);
+  }
+  .modal-box h2 { font-size: 1.15rem; font-weight: 700; margin-bottom: .35rem; }
+  .modal-box p  { font-size: .83rem; color: var(--muted); margin-bottom: 1.2rem; line-height: 1.55; }
+  .modal-box label { font-size: .74rem; font-weight: 700; color: var(--muted);
+                     text-transform: uppercase; letter-spacing: .07em; margin-bottom: .3rem; display:block; }
+  .modal-box input { width:100%; padding:.65rem .9rem; border:1.5px solid var(--border);
+                     border-radius:8px; font-size:.93rem; margin-bottom:1rem; }
+  .modal-box input:focus { outline:none; border-color:var(--primary); }
+  .modal-actions { display:flex; gap:.65rem; justify-content:flex-end; }
+  .modal-note { font-size:.75rem; color:var(--muted); margin-top:.75rem; line-height:1.5; }
 </style>
 </head>
 <body>
 
 <header>
   <h1>🇺🇸 Vocab Trainer</h1>
-  <div class="meta" id="headerMeta">No file loaded</div>
+  <div style="display:flex;align-items:center;gap:.75rem;">
+    <div class="meta" id="headerMeta">No file loaded</div>
+    <button onclick="openSettings()" title="Settings"
+      style="background:none;border:none;color:white;font-size:1.2rem;cursor:pointer;opacity:.8;line-height:1;padding:.1rem;">⚙️</button>
+  </div>
 </header>
+
+<!-- ══ SETTINGS MODAL ══ -->
+<div id="settingsModal" class="modal-overlay" onclick="if(event.target===this)closeSettings()">
+  <div class="modal-box">
+    <h2>⚙️ Settings</h2>
+    <p>Enter your <strong>Merriam-Webster Collegiate Dictionary API key</strong> to enable authentic American English pronunciation on flashcards. Your key is stored locally — it never leaves your device.</p>
+    <label for="mwKeyInput">Merriam-Webster API Key</label>
+    <input type="text" id="mwKeyInput" placeholder="Paste your key here…" autocomplete="off" spellcheck="false">
+    <div class="modal-actions">
+      <button class="btn btn-ghost" onclick="closeSettings()">Cancel</button>
+      <button class="btn btn-primary" onclick="saveSettings()">Save</button>
+    </div>
+    <p class="modal-note">
+      🔑 Get a free key at <strong>dictionaryapi.com</strong> → sign up → request "Collegiate Dictionary".<br>
+      Leave blank to use browser text-to-speech instead.
+    </p>
+  </div>
+</div>
 
 <!-- ══ SCREEN: Open file ══ -->
 <div id="screenOpen" class="screen active">
@@ -282,6 +338,7 @@
               <div class="face-type"  id="cardType"  style="display:none;"></div>
               <div class="face-extra" id="cardExtra"></div>
               <span class="face-hint">Click card to flip back</span>
+              <button class="btn-sound" id="btnSound" onclick="event.stopPropagation(); playPronunciation()" title="Hear pronunciation">🔊</button>
             </div>
           </div>
         </div>
@@ -386,6 +443,7 @@ let correct      = 0;
 let filter       = 'all';
 let missedWords  = [];
 let currentSheet = '';
+let mwApiKey     = localStorage.getItem('vocab_mw_key') || '';
 
 const learned = new Set(JSON.parse(localStorage.getItem('vocab_learned') || '[]'));
 
@@ -769,6 +827,84 @@ function renderWordList() {
 
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+/* ═══════════════════════════════════════════════
+   SETTINGS
+═══════════════════════════════════════════════ */
+function openSettings() {
+  document.getElementById('mwKeyInput').value = mwApiKey;
+  document.getElementById('settingsModal').classList.add('open');
+}
+function closeSettings() {
+  document.getElementById('settingsModal').classList.remove('open');
+}
+function saveSettings() {
+  const key = document.getElementById('mwKeyInput').value.trim();
+  mwApiKey = key;
+  if (key) localStorage.setItem('vocab_mw_key', key);
+  else     localStorage.removeItem('vocab_mw_key');
+  closeSettings();
+}
+
+/* ═══════════════════════════════════════════════
+   PRONUNCIATION  (Merriam-Webster + TTS fallback)
+═══════════════════════════════════════════════ */
+async function playPronunciation() {
+  const word = filteredWords[currentIndex]?.english;
+  if (!word) return;
+
+  const btn = document.getElementById('btnSound');
+  btn.classList.add('playing');
+
+  try {
+    if (mwApiKey) {
+      const clean = word.split(/[\s,\/]+/)[0]; // use first word of a phrase
+      const url   = `https://www.dictionaryapi.com/api/v3/references/collegiate/json/${encodeURIComponent(clean)}?key=${mwApiKey}`;
+      const resp  = await fetch(url);
+      if (!resp.ok) throw new Error('MW API error');
+      const data  = await resp.json();
+
+      // Find first entry with audio
+      let audioFile = null;
+      for (const entry of data) {
+        const audio = entry?.hwi?.prs?.[0]?.sound?.audio;
+        if (audio) { audioFile = audio; break; }
+      }
+
+      if (audioFile) {
+        // Determine subdirectory
+        let subdir;
+        if (audioFile.startsWith('bix'))         subdir = 'bix';
+        else if (audioFile.startsWith('gg'))      subdir = 'gg';
+        else if (/^\d/.test(audioFile))           subdir = 'number';
+        else                                       subdir = audioFile[0];
+
+        const mp3 = `https://media.merriam-webster.com/audio/prons/en/us/mp3/${subdir}/${audioFile}.mp3`;
+        const audio = new Audio(mp3);
+        audio.onended = () => btn.classList.remove('playing');
+        audio.onerror = () => { btn.classList.remove('playing'); ttsFallback(word); };
+        await audio.play();
+        return;
+      }
+    }
+    // Fallback: Web Speech API
+    ttsFallback(word);
+  } catch(e) {
+    ttsFallback(word);
+  } finally {
+    // Button pulse removed on audio end or immediately for TTS
+  }
+}
+
+function ttsFallback(word) {
+  const btn = document.getElementById('btnSound');
+  if (!('speechSynthesis' in window)) { btn.classList.remove('playing'); return; }
+  const utt = new SpeechSynthesisUtterance(word);
+  utt.lang = 'en-US';
+  utt.onend = () => btn.classList.remove('playing');
+  utt.onerror = () => btn.classList.remove('playing');
+  speechSynthesis.speak(utt);
 }
 
 function downloadFile() {
