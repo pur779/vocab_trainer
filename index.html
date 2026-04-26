@@ -206,6 +206,31 @@
   .badge-new     { background: #e0e7ff; color: #3730a3; }
   .list-info { font-size: .8rem; color: var(--muted); margin-bottom: .6rem; }
 
+  /* ── Global search ── */
+  .global-search-wrap { position: relative; margin-bottom: 1.1rem; }
+  .global-search-input {
+    width: 100%; padding: .7rem 1rem .7rem 2.4rem;
+    border: 1.5px solid var(--border); border-radius: 10px;
+    font-size: .93rem; background: white;
+  }
+  .global-search-input:focus { outline: none; border-color: var(--primary); }
+  .global-search-icon { position: absolute; left: .8rem; top: 50%; transform: translateY(-50%); color: var(--muted); font-size: 1rem; pointer-events: none; }
+  .search-results {
+    position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+    background: white; border: 1.5px solid var(--border); border-radius: 10px;
+    box-shadow: 0 6px 24px rgba(0,0,0,.1); z-index: 50;
+    max-height: 280px; overflow-y: auto; display: none;
+  }
+  .search-result-item {
+    padding: .65rem 1rem; cursor: pointer; border-bottom: 1px solid var(--border);
+    display: flex; justify-content: space-between; align-items: center; gap: .5rem;
+  }
+  .search-result-item:last-child { border-bottom: none; }
+  .search-result-item:hover { background: #f0f4ff; }
+  .search-result-en { font-weight: 600; font-size: .9rem; }
+  .search-result-de { font-size: .8rem; color: var(--muted); }
+  .search-result-sheet { font-size: .72rem; background: #e0e7ff; color: #3730a3; padding: .1rem .4rem; border-radius: 99px; white-space: nowrap; }
+
   /* ── Sound button ── */
   .btn-sound {
     background: none; border: 2px solid rgba(79,70,229,.35);
@@ -293,6 +318,15 @@
       </label>
       <input type="file" id="fileInput2" accept=".xlsx" style="display:none;" onchange="clearCache(); onFileChosen(this);">
     </div>
+    <!-- Global search -->
+    <div class="global-search-wrap">
+      <span class="global-search-icon">🔍</span>
+      <input type="text" class="global-search-input" id="globalSearch"
+        placeholder="Search any word across all sheets…"
+        oninput="onGlobalSearch(this.value)"
+        autocomplete="off" spellcheck="false">
+      <div class="search-results" id="globalSearchResults"></div>
+    </div>
     <div class="sheet-grid" id="sheetGrid"></div>
   </main>
 </div>
@@ -316,6 +350,14 @@
         <button class="chip" onclick="setFilter('unlearned',this)">Not learned</button>
         <button class="chip" onclick="setFilter('learned',this)">Learned</button>
         <button class="chip" style="margin-left:auto;" onclick="shuffleAndStart()">🔀 Shuffle</button>
+      </div>
+      <div class="global-search-wrap" style="margin-bottom:.75rem;">
+        <span class="global-search-icon">🔍</span>
+        <input type="text" class="global-search-input" id="cardSearch"
+          placeholder="Jump to a word…"
+          oninput="onCardSearch(this.value)"
+          autocomplete="off" spellcheck="false">
+        <div class="search-results" id="cardSearchResults"></div>
       </div>
 
       <div id="flashcardArea">
@@ -503,6 +545,7 @@ function showSheetSelector(sheetsData) {
     saveCache(sheets);
   }
 
+  _cachedSheetsData = sheets;
   const total = sheets.reduce((a, b) => a + b.count, 0);
   document.getElementById('sheetSubtitle').textContent =
     `${sheets.length} sheets · ${total.toLocaleString()} words total`;
@@ -691,6 +734,7 @@ function showCard() {
 
   document.getElementById('cardExtra').textContent = w.extra || '';
   document.getElementById('flashcard').classList.remove('flipped');
+  document.getElementById('btnSound').style.display = 'inline-flex';
   flipped = false;
 
   const pct = (currentIndex / filteredWords.length) * 100;
@@ -702,6 +746,7 @@ function showCard() {
 function flipCard() {
   flipped = !flipped;
   document.getElementById('flashcard').classList.toggle('flipped', flipped);
+  document.getElementById('btnSound').style.display = flipped ? 'none' : 'inline-flex';
 }
 
 function markCard(wasCorrect) {
@@ -825,6 +870,94 @@ function renderWordList() {
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
+
+/* ═══════════════════════════════════════════════
+   GLOBAL SEARCH (sheet selector)
+═══════════════════════════════════════════════ */
+let _cachedSheetsData = null;
+
+function onGlobalSearch(q) {
+  const box = document.getElementById('globalSearchResults');
+  if (!q.trim() || !_cachedSheetsData) { box.style.display = 'none'; return; }
+  const ql = q.toLowerCase();
+  const hits = [];
+  for (const s of _cachedSheetsData) {
+    for (const w of s.words) {
+      if (w.english.toLowerCase().includes(ql) || w.german.toLowerCase().includes(ql)) {
+        hits.push({ word: w, sheet: s.name });
+        if (hits.length >= 30) break;
+      }
+    }
+    if (hits.length >= 30) break;
+  }
+  if (!hits.length) {
+    box.innerHTML = '<div class="search-result-item"><span class="search-result-de">No results</span></div>';
+    box.style.display = 'block'; return;
+  }
+  box.innerHTML = hits.map(h => `
+    <div class="search-result-item" onclick="globalSearchJump('${esc(h.sheet)}', '${esc(h.word.english)}')">
+      <div>
+        <div class="search-result-en">${esc(h.word.english)}</div>
+        <div class="search-result-de">${esc(h.word.german)}</div>
+      </div>
+      <span class="search-result-sheet">${esc(titleCase(h.sheet))}</span>
+    </div>`).join('');
+  box.style.display = 'block';
+}
+
+function globalSearchJump(sheetName, englishWord) {
+  document.getElementById('globalSearchResults').style.display = 'none';
+  document.getElementById('globalSearch').value = '';
+  loadSheet(sheetName, _cachedSheetsData);
+  // After loading, jump to the word
+  setTimeout(() => {
+    const idx = filteredWords.findIndex(w => w.english === englishWord);
+    if (idx >= 0) { currentIndex = idx; showCard(); }
+  }, 50);
+}
+
+/* ═══════════════════════════════════════════════
+   CARD JUMP SEARCH (flashcard tab)
+═══════════════════════════════════════════════ */
+function onCardSearch(q) {
+  const box = document.getElementById('cardSearchResults');
+  if (!q.trim()) { box.style.display = 'none'; return; }
+  const ql = q.toLowerCase();
+  const hits = filteredWords
+    .map((w, i) => ({ w, i }))
+    .filter(({ w }) => w.english.toLowerCase().includes(ql) || w.german.toLowerCase().includes(ql))
+    .slice(0, 20);
+  if (!hits.length) {
+    box.innerHTML = '<div class="search-result-item"><span class="search-result-de">No results</span></div>';
+    box.style.display = 'block'; return;
+  }
+  box.innerHTML = hits.map(({ w, i }) => `
+    <div class="search-result-item" onclick="cardSearchJump(${i})">
+      <div>
+        <div class="search-result-en">${esc(w.english)}</div>
+        <div class="search-result-de">${esc(w.german)}</div>
+      </div>
+      <span class="search-result-sheet">#${i + 1}</span>
+    </div>`).join('');
+  box.style.display = 'block';
+}
+
+function cardSearchJump(idx) {
+  document.getElementById('cardSearchResults').style.display = 'none';
+  document.getElementById('cardSearch').value = '';
+  currentIndex = idx;
+  flipped = false;
+  document.getElementById('doneScreen').style.display    = 'none';
+  document.getElementById('flashcardArea').style.display = 'block';
+  showCard();
+}
+
+// Close dropdowns when clicking outside
+document.addEventListener('click', e => {
+  if (!e.target.closest('.global-search-wrap')) {
+    document.querySelectorAll('.search-results').forEach(el => el.style.display = 'none');
+  }
+});
 
 /* ═══════════════════════════════════════════════
    SETTINGS
