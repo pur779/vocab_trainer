@@ -735,11 +735,13 @@ function setFilter(f, btn) {
 }
 
 function applyFilter() {
-  if      (filter === 'all')      filteredWords = [...allWords];
+  if      (filter === 'all')       filteredWords = [...allWords];
   else if (filter === 'unlearned') filteredWords = allWords.filter(w => !learned.has(w.english));
   else if (filter === 'learned')   filteredWords = allWords.filter(w =>  learned.has(w.english));
   else if (filter === 'missed')    filteredWords = [...missedWords];
   currentIndex = 0; correct = 0; flipped = false; missedWords = [];
+  // Restore last position for this sheet (only for 'all' and 'unlearned' — position is meaningful there)
+  if (filter === 'all' || filter === 'unlearned') restoreProgress();
   document.getElementById('doneScreen').style.display     = 'none';
   document.getElementById('flashcardArea').style.display  = 'block';
   showCard();
@@ -786,6 +788,8 @@ function showCard() {
   document.getElementById('progressFill').style.width  = pct + '%';
   document.getElementById('progressText').textContent  =
     `Card ${currentIndex + 1} of ${filteredWords.length}`;
+
+  saveProgress();
 }
 
 function flipCard() {
@@ -808,6 +812,21 @@ function nextCard() {
 }
 function prevCard() {
   if (currentIndex > 0) { currentIndex--; showCard(); }
+}
+
+/* ── Progress persistence ── */
+function saveProgress() {
+  const w = filteredWords[currentIndex];
+  if (!w || !currentSheet) return;
+  localStorage.setItem('vocab_pos_' + currentSheet, w.english);
+}
+
+function restoreProgress() {
+  if (!currentSheet || !filteredWords.length) return;
+  const saved = localStorage.getItem('vocab_pos_' + currentSheet);
+  if (!saved) return;
+  const idx = filteredWords.findIndex(w => w.english === saved);
+  if (idx !== -1) currentIndex = idx;
 }
 
 function showDone() {
@@ -1055,6 +1074,7 @@ function saveSettings() {
 let carModeActive   = false;
 let carLoopTimer    = null;
 let carRecognition  = null;
+let carIosKeepAlive = null;   // iOS: prevents speechSynthesis from suspending
 
 function toggleCarMode() {
   carModeActive ? stopCarMode() : startCarMode();
@@ -1069,6 +1089,16 @@ function startCarMode() {
   document.getElementById('btnCar').textContent = '⏹ Stop Car Mode';
   document.getElementById('btnCar').classList.add('active');
   document.getElementById('carStatus').style.display = 'block';
+
+  // Mobile fix: speechSynthesis silently suspends after screen inactivity on some devices.
+  // Periodic pause+resume keeps the audio session alive. The pause duration is sub-millisecond
+  // so it is inaudible; we only do it between words (when not speaking) to avoid mid-word glitches.
+  carIosKeepAlive = setInterval(() => {
+    if (!window.speechSynthesis.speaking) {
+      window.speechSynthesis.pause();
+      window.speechSynthesis.resume();
+    }
+  }, 8000);
 
   // Start continuous voice recognition for "next" / "stop"
   const rec = new SR();
@@ -1091,6 +1121,7 @@ function startCarMode() {
 function stopCarMode() {
   carModeActive = false;
   clearTimeout(carLoopTimer);
+  clearInterval(carIosKeepAlive); carIosKeepAlive = null;
   window.speechSynthesis.cancel();
   if (carRecognition) { try { carRecognition.stop(); } catch(e){} carRecognition = null; }
   document.getElementById('btnCar').textContent = '🚗 Car Mode';
@@ -1160,18 +1191,38 @@ async function runCarCycle() {
   carLoopTimer = setTimeout(() => { if (carModeActive) runCarCycle(); }, 3000);
 }
 
-function carSpeak(text, lang, rate) {
+// Async voice loader — iOS returns empty array from getVoices() until voiceschanged fires
+let _voicesCache = null;
+async function getVoicesAsync() {
+  if (_voicesCache?.length) return _voicesCache;
+  const immediate = window.speechSynthesis.getVoices();
+  if (immediate.length) { _voicesCache = immediate; return immediate; }
   return new Promise(resolve => {
-    if (!text || !('speechSynthesis' in window)) { resolve(); return; }
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.lang = lang;
-    utt.rate = rate || 0.88;
-    // Try to pick a native voice for the language
-    const voices = window.speechSynthesis.getVoices();
-    const match  = voices.find(v => v.lang.startsWith(lang.split('-')[0]) && v.lang === lang)
-                || voices.find(v => v.lang.startsWith(lang.split('-')[0]));
-    if (match) utt.voice = match;
+    const timeout = setTimeout(() => {
+      _voicesCache = window.speechSynthesis.getVoices();
+      resolve(_voicesCache);
+    }, 1000);
+    window.speechSynthesis.addEventListener('voiceschanged', () => {
+      clearTimeout(timeout);
+      _voicesCache = window.speechSynthesis.getVoices();
+      resolve(_voicesCache);
+    }, { once: true });
+  });
+}
+
+async function carSpeak(text, lang, rate) {
+  if (!text || !('speechSynthesis' in window)) return;
+  const voices = await getVoicesAsync();
+  const utt    = new SpeechSynthesisUtterance(text);
+  utt.lang     = lang;
+  utt.rate     = rate || 0.88;
+  // Prefer exact lang match, then any voice for that language
+  const match = voices.find(v => v.lang === lang)
+             || voices.find(v => v.lang.startsWith(lang.split('-')[0]));
+  if (match) utt.voice = match;
+  // No cancel() here — awaiting each carSpeak() means only one utterance runs at a time.
+  // cancel() on stop/next is handled by carAdvance() and stopCarMode().
+  return new Promise(resolve => {
     utt.onend   = resolve;
     utt.onerror = resolve;
     window.speechSynthesis.speak(utt);
@@ -1191,38 +1242,42 @@ function setCarStatus(msg) {
 }
 
 /* ═══════════════════════════════════════════════
-   DEFINITION  (Merriam-Webster first sense)
+   DEFINITION  (MW first → free API fallback)
 ═══════════════════════════════════════════════ */
 async function loadDefinition(word) {
   const defEl = document.getElementById('cardDefinition');
-  if (!mwApiKey) return;   // No key — silently skip
+  if (defCache[word] !== undefined) { defEl.textContent = defCache[word]; return; }
 
-  // Return from session cache if available
-  if (defCache[word] !== undefined) {
-    defEl.textContent = defCache[word];
-    return;
+  // 1 — Try Merriam-Webster (if key is set)
+  if (mwApiKey) {
+    try {
+      const res  = await fetch(
+        `https://www.dictionaryapi.com/api/v3/references/collegiate/json/${encodeURIComponent(word)}?key=${mwApiKey}`
+      );
+      const data = await res.json();
+      const entry = Array.isArray(data) && data.find(e => e.shortdef?.length);
+      if (entry) {
+        const raw = entry.shortdef[0].replace(/:$/, '').trim();
+        defCache[word] = raw; defEl.textContent = raw; return;
+      }
+    } catch(e) {}
   }
 
+  // 2 — Free fallback: api.dictionaryapi.dev (no key needed — works on mobile)
   try {
     const res  = await fetch(
-      `https://www.dictionaryapi.com/api/v3/references/collegiate/json/${encodeURIComponent(word)}?key=${mwApiKey}`
+      `https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(word)}`
     );
     const data = await res.json();
-
-    // Find first entry that is an actual definition (has shortdef)
-    const entry = Array.isArray(data) && data.find(e => e.shortdef && e.shortdef.length);
-    if (entry) {
-      // shortdef[0] is the cleanest first sense — strip trailing colon if present
-      const raw = entry.shortdef[0].replace(/:$/, '').trim();
-      defCache[word] = raw;
-      defEl.textContent = raw;
-    } else {
-      defCache[word] = '';   // Not found — cache empty to avoid repeat calls
+    const def  = data[0]?.meanings?.[0]?.definitions?.[0]?.definition;
+    if (def) {
+      // Keep first sentence only if the definition runs long
+      const sentence = def.split(/(?<=[.!?])\s/)[0];
+      defCache[word] = sentence; defEl.textContent = sentence; return;
     }
-  } catch(e) {
-    // Network error or quota — fail silently
-    defCache[word] = '';
-  }
+  } catch(e) {}
+
+  defCache[word] = '';
 }
 
 function readDefinition() {
@@ -1230,10 +1285,12 @@ function readDefinition() {
   const text  = defEl.textContent.trim();
   if (!text || !('speechSynthesis' in window)) return;
   window.speechSynthesis.cancel();
-  const utt = new SpeechSynthesisUtterance(text);
-  utt.lang = 'en-US';
-  utt.rate = 0.92;
-  window.speechSynthesis.speak(utt);
+  // 50 ms gap — iOS drops speak() if called too quickly after cancel()
+  setTimeout(() => {
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang = 'en-US'; utt.rate = 0.92;
+    window.speechSynthesis.speak(utt);
+  }, 50);
 }
 
 /* ═══════════════════════════════════════════════
@@ -1289,11 +1346,15 @@ async function playPronunciation() {
 function ttsFallback(word) {
   const btn = document.getElementById('btnSound');
   if (!('speechSynthesis' in window)) { btn.classList.remove('playing'); return; }
-  const utt = new SpeechSynthesisUtterance(word);
-  utt.lang = 'en-US';
-  utt.onend = () => btn.classList.remove('playing');
-  utt.onerror = () => btn.classList.remove('playing');
-  speechSynthesis.speak(utt);
+  window.speechSynthesis.cancel();
+  // 50 ms gap — iOS drops speak() if called too quickly after cancel()
+  setTimeout(() => {
+    const utt = new SpeechSynthesisUtterance(word);
+    utt.lang = 'en-US'; utt.rate = 0.88;
+    utt.onend   = () => btn.classList.remove('playing');
+    utt.onerror = () => btn.classList.remove('playing');
+    window.speechSynthesis.speak(utt);
+  }, 50);
 }
 
 function downloadFile() {
