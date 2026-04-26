@@ -1071,12 +1071,11 @@ function saveSettings() {
 /* ═══════════════════════════════════════════════
    CAR MODE
 ═══════════════════════════════════════════════ */
-let carModeActive   = false;
-let carCycleId      = 0;       // incremented on every new cycle; old cycles check this and exit
-let carLoopTimer    = null;
-let carLoopResolve  = null;    // resolves the 3-second repeat wait immediately on advance/stop
-let carRecognition  = null;
-let carKeepAlive    = null;
+let carModeActive  = false;
+let carCycleId     = 0;      // incremented every new cycle; old cycles detect this and exit
+let carLoopTimer   = null;   // the 3-second repeat setTimeout — cleared by carAdvance/stopCarMode
+let carRecognition = null;
+let carKeepAlive   = null;
 
 function toggleCarMode() {
   carModeActive ? stopCarMode() : startCarMode();
@@ -1121,7 +1120,6 @@ function stopCarMode() {
   carModeActive = false;
   clearTimeout(carLoopTimer);
   clearInterval(carKeepAlive); carKeepAlive = null;
-  if (carLoopResolve) { carLoopResolve(); carLoopResolve = null; }
   window.speechSynthesis.cancel();
   if (carRecognition) { try { carRecognition.stop(); } catch(e){} carRecognition = null; }
   document.getElementById('btnCar').textContent = '🚗 Car Mode';
@@ -1131,14 +1129,12 @@ function stopCarMode() {
 }
 
 function carAdvance() {
-  // Resolve the 3-second wait immediately so the old cycle can exit cleanly
-  clearTimeout(carLoopTimer);
-  if (carLoopResolve) { carLoopResolve(); carLoopResolve = null; }
-  window.speechSynthesis.cancel();
+  clearTimeout(carLoopTimer);        // stop the 3-second repeat if it's waiting
+  window.speechSynthesis.cancel();   // stop any speech mid-word
   if (currentIndex < filteredWords.length - 1) {
     currentIndex++;
     showCard();
-    runCarCycle();   // increments carCycleId — old cycle's alive() checks will now fail
+    runCarCycle();   // new cycle — increments carCycleId, old cycle's alive() checks will fail
   } else {
     stopCarMode();
     showDone();
@@ -1146,17 +1142,20 @@ function carAdvance() {
 }
 
 async function runCarCycle() {
-  // Each call gets a unique ID. Before every async step we verify we're still the active cycle.
+  // Each invocation gets a unique ID. We check alive() after every await so a stale
+  // cycle (interrupted by "next" or "stop") exits at the very next checkpoint.
   const myId  = ++carCycleId;
   const alive = () => carModeActive && carCycleId === myId;
   const pause = ms => new Promise(r => setTimeout(r, ms));
 
+  // Brief settling pause — Android drops speak() called too quickly after cancel()
+  await pause(150);
   if (!alive()) return;
 
-  // Snapshot word data NOW — never read filteredWords[currentIndex] after an await
+  // Snapshot word data before any await — currentIndex may change mid-cycle
   const w       = filteredWords[currentIndex];
-  const german  = w.german  || '';
   const english = w.english || '';
+  const german  = w.german  || '';
 
   // Ensure card shows front
   if (flipped) {
@@ -1172,7 +1171,7 @@ async function runCarCycle() {
   if (!alive()) return;
   await pause(600);
 
-  // — Definition —
+  // — Definition (if available) —
   if (!alive()) return;
   const defText = document.getElementById('cardDefinition').textContent.trim();
   if (defText) {
@@ -1198,14 +1197,11 @@ async function runCarCycle() {
   document.getElementById('btnSound').style.display = 'inline-flex';
   flipped = false;
 
-  // — Wait 3 s then repeat —
+  // — Repeat after 3 s —
+  // Simple setTimeout (not await) — carCycleId guards against stale calls.
+  // clearTimeout(carLoopTimer) in carAdvance/stopCarMode handles the "next"/"stop" case.
   setCarStatus('👂 Say "next" to continue…');
-  await new Promise(resolve => {
-    carLoopResolve = resolve;
-    carLoopTimer   = setTimeout(resolve, 3000);
-  });
-  carLoopResolve = null;
-  if (alive()) runCarCycle();
+  carLoopTimer = setTimeout(() => { if (alive()) runCarCycle(); }, 3000);
 }
 
 // Async voice loader — iOS returns empty array from getVoices() until voiceschanged fires
@@ -1233,15 +1229,20 @@ async function carSpeak(text, lang, rate) {
   const utt    = new SpeechSynthesisUtterance(text);
   utt.lang     = lang;
   utt.rate     = rate || 0.88;
-  // Prefer exact lang match, then any voice for that language
-  const match = voices.find(v => v.lang === lang)
-             || voices.find(v => v.lang.startsWith(lang.split('-')[0]));
+  const match  = voices.find(v => v.lang === lang)
+              || voices.find(v => v.lang.startsWith(lang.split('-')[0]));
   if (match) utt.voice = match;
-  // No cancel() here — awaiting each carSpeak() means only one utterance runs at a time.
-  // cancel() on stop/next is handled by carAdvance() and stopCarMode().
+
   return new Promise(resolve => {
-    utt.onend   = resolve;
-    utt.onerror = resolve;
+    // Android Chrome often never fires onend — especially after cancel() or mid-session.
+    // Timeout fallback: estimate speaking duration from word count + generous buffer,
+    // then resolve automatically so the cycle never gets permanently stuck.
+    const words      = text.trim().split(/\s+/).length;
+    const estimatedMs = Math.max(3000, Math.ceil(words * 650 / (rate || 0.88))) + 1500;
+    const fallback   = setTimeout(resolve, estimatedMs);
+
+    utt.onend   = () => { clearTimeout(fallback); resolve(); };
+    utt.onerror = () => { clearTimeout(fallback); resolve(); };
     window.speechSynthesis.speak(utt);
   });
 }
