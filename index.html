@@ -259,6 +259,20 @@
   .btn-sound.playing { animation: pulse .6s infinite alternate; border-color: var(--primary); }
   @keyframes pulse { from { opacity: 1; } to { opacity: .4; } }
 
+  /* ── Car Mode ── */
+  .btn-car {
+    padding: .55rem 1.4rem; border-radius: 99px; border: 2px solid #f59e0b;
+    background: #fffbeb; color: #92400e; font-size: .88rem; font-weight: 600;
+    cursor: pointer; transition: all .15s; letter-spacing: .01em;
+  }
+  .btn-car:hover  { background: #fef3c7; border-color: #d97706; }
+  .btn-car.active { background: #dc2626; border-color: #dc2626; color: white; animation: pulse .8s infinite alternate; }
+  .car-status {
+    text-align: center; font-size: .8rem; color: var(--muted);
+    padding: .4rem .8rem; background: #f8fafc; border-radius: 8px;
+    margin-top: .3rem; letter-spacing: .01em;
+  }
+
   /* ── Settings modal ── */
   .modal-overlay {
     display: none; position: fixed; inset: 0;
@@ -408,10 +422,14 @@
           <button class="btn btn-outline" onclick="flipCard()">↩ Flip</button>
           <button class="btn btn-success" onclick="markCard(true)">✓ Got it</button>
         </div>
-        <div class="controls">
+        <div class="controls" style="margin-bottom:.5rem;">
           <button class="btn btn-outline" style="padding:.45rem .9rem;font-size:.82rem;" onclick="prevCard()">← Prev</button>
           <button class="btn btn-outline" style="padding:.45rem .9rem;font-size:.82rem;" onclick="nextCard()">Next →</button>
         </div>
+        <div class="controls">
+          <button class="btn-car" id="btnCar" onclick="toggleCarMode()">🚗 Car Mode</button>
+        </div>
+        <div id="carStatus" class="car-status" style="display:none;"></div>
       </div>
 
       <div id="doneScreen" class="done-screen" style="display:none;">
@@ -1029,6 +1047,147 @@ function saveSettings() {
   if (key) localStorage.setItem('vocab_mw_key', key);
   else     localStorage.removeItem('vocab_mw_key');
   closeSettings();
+}
+
+/* ═══════════════════════════════════════════════
+   CAR MODE
+═══════════════════════════════════════════════ */
+let carModeActive   = false;
+let carLoopTimer    = null;
+let carRecognition  = null;
+
+function toggleCarMode() {
+  carModeActive ? stopCarMode() : startCarMode();
+}
+
+function startCarMode() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert('Car Mode needs voice recognition. Use Chrome or Edge.'); return; }
+  if (!filteredWords.length) return;
+
+  carModeActive = true;
+  document.getElementById('btnCar').textContent = '⏹ Stop Car Mode';
+  document.getElementById('btnCar').classList.add('active');
+  document.getElementById('carStatus').style.display = 'block';
+
+  // Start continuous voice recognition for "next" / "stop"
+  const rec = new SR();
+  rec.lang = 'en-US';
+  rec.continuous = true;
+  rec.interimResults = false;
+  rec.onresult = e => {
+    const said = e.results[e.results.length - 1][0].transcript.trim().toLowerCase();
+    if (said.includes('stop'))       { stopCarMode(); return; }
+    if (said.includes('next'))       { carAdvance(); }
+  };
+  rec.onend = () => { if (carModeActive) { try { rec.start(); } catch(e){} } };
+  rec.onerror = () => {};
+  try { rec.start(); } catch(e) {}
+  carRecognition = rec;
+
+  runCarCycle();
+}
+
+function stopCarMode() {
+  carModeActive = false;
+  clearTimeout(carLoopTimer);
+  window.speechSynthesis.cancel();
+  if (carRecognition) { try { carRecognition.stop(); } catch(e){} carRecognition = null; }
+  document.getElementById('btnCar').textContent = '🚗 Car Mode';
+  document.getElementById('btnCar').classList.remove('active');
+  document.getElementById('carStatus').style.display = 'none';
+  // Make sure card is showing front
+  if (flipped) flipCard();
+}
+
+function carAdvance() {
+  clearTimeout(carLoopTimer);
+  window.speechSynthesis.cancel();
+  if (currentIndex < filteredWords.length - 1) {
+    currentIndex++;
+    showCard();
+    runCarCycle();
+  } else {
+    stopCarMode();
+    showDone();
+  }
+}
+
+async function runCarCycle() {
+  if (!carModeActive) return;
+  const w = filteredWords[currentIndex];
+
+  // Make sure card is on the front
+  if (flipped) {
+    document.getElementById('flashcard').classList.remove('flipped');
+    document.getElementById('btnSound').style.display = 'inline-flex';
+    flipped = false;
+  }
+
+  // — Speak English word —
+  setCarStatus('🇺🇸 ' + w.english);
+  await carSpeak(w.english, 'en-US', 0.88);
+  if (!carModeActive) return;
+  await carWait(600);
+  if (!carModeActive) return;
+
+  // — Speak definition (if loaded) —
+  const defText = document.getElementById('cardDefinition').textContent.trim();
+  if (defText) {
+    setCarStatus('📖 ' + defText);
+    await carSpeak(defText, 'en-US', 0.88);
+    if (!carModeActive) return;
+    await carWait(600);
+    if (!carModeActive) return;
+  }
+
+  // — Flip card, speak German —
+  document.getElementById('flashcard').classList.add('flipped');
+  document.getElementById('btnSound').style.display = 'none';
+  flipped = true;
+  setCarStatus('🇩🇪 ' + (w.german || ''));
+  await carSpeak(w.german || '', 'de-DE', 0.88);
+  if (!carModeActive) return;
+
+  // — Flip back, wait 3s, then repeat —
+  await carWait(400);
+  if (!carModeActive) return;
+  document.getElementById('flashcard').classList.remove('flipped');
+  document.getElementById('btnSound').style.display = 'inline-flex';
+  flipped = false;
+
+  setCarStatus('👂 Say "next" to continue…');
+  carLoopTimer = setTimeout(() => { if (carModeActive) runCarCycle(); }, 3000);
+}
+
+function carSpeak(text, lang, rate) {
+  return new Promise(resolve => {
+    if (!text || !('speechSynthesis' in window)) { resolve(); return; }
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.lang = lang;
+    utt.rate = rate || 0.88;
+    // Try to pick a native voice for the language
+    const voices = window.speechSynthesis.getVoices();
+    const match  = voices.find(v => v.lang.startsWith(lang.split('-')[0]) && v.lang === lang)
+                || voices.find(v => v.lang.startsWith(lang.split('-')[0]));
+    if (match) utt.voice = match;
+    utt.onend   = resolve;
+    utt.onerror = resolve;
+    window.speechSynthesis.speak(utt);
+  });
+}
+
+function carWait(ms) {
+  return new Promise(resolve => {
+    if (!carModeActive) { resolve(); return; }
+    carLoopTimer = setTimeout(resolve, ms);
+  });
+}
+
+function setCarStatus(msg) {
+  const el = document.getElementById('carStatus');
+  if (el) el.textContent = msg;
 }
 
 /* ═══════════════════════════════════════════════
