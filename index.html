@@ -1072,9 +1072,11 @@ function saveSettings() {
    CAR MODE
 ═══════════════════════════════════════════════ */
 let carModeActive   = false;
+let carCycleId      = 0;       // incremented on every new cycle; old cycles check this and exit
 let carLoopTimer    = null;
+let carLoopResolve  = null;    // resolves the 3-second repeat wait immediately on advance/stop
 let carRecognition  = null;
-let carIosKeepAlive = null;   // iOS: prevents speechSynthesis from suspending
+let carKeepAlive    = null;
 
 function toggleCarMode() {
   carModeActive ? stopCarMode() : startCarMode();
@@ -1090,27 +1092,24 @@ function startCarMode() {
   document.getElementById('btnCar').classList.add('active');
   document.getElementById('carStatus').style.display = 'block';
 
-  // Mobile fix: speechSynthesis silently suspends after screen inactivity on some devices.
-  // Periodic pause+resume keeps the audio session alive. The pause duration is sub-millisecond
-  // so it is inaudible; we only do it between words (when not speaking) to avoid mid-word glitches.
-  carIosKeepAlive = setInterval(() => {
+  // Keep audio session alive on mobile (screen dimming can suspend speechSynthesis)
+  carKeepAlive = setInterval(() => {
     if (!window.speechSynthesis.speaking) {
       window.speechSynthesis.pause();
       window.speechSynthesis.resume();
     }
   }, 8000);
 
-  // Start continuous voice recognition for "next" / "stop"
   const rec = new SR();
   rec.lang = 'en-US';
   rec.continuous = true;
   rec.interimResults = false;
   rec.onresult = e => {
     const said = e.results[e.results.length - 1][0].transcript.trim().toLowerCase();
-    if (said.includes('stop'))       { stopCarMode(); return; }
-    if (said.includes('next'))       { carAdvance(); }
+    if (said.includes('stop')) { stopCarMode(); return; }
+    if (said.includes('next')) { carAdvance(); }
   };
-  rec.onend = () => { if (carModeActive) { try { rec.start(); } catch(e){} } };
+  rec.onend   = () => { if (carModeActive) { try { rec.start(); } catch(e){} } };
   rec.onerror = () => {};
   try { rec.start(); } catch(e) {}
   carRecognition = rec;
@@ -1121,23 +1120,25 @@ function startCarMode() {
 function stopCarMode() {
   carModeActive = false;
   clearTimeout(carLoopTimer);
-  clearInterval(carIosKeepAlive); carIosKeepAlive = null;
+  clearInterval(carKeepAlive); carKeepAlive = null;
+  if (carLoopResolve) { carLoopResolve(); carLoopResolve = null; }
   window.speechSynthesis.cancel();
   if (carRecognition) { try { carRecognition.stop(); } catch(e){} carRecognition = null; }
   document.getElementById('btnCar').textContent = '🚗 Car Mode';
   document.getElementById('btnCar').classList.remove('active');
   document.getElementById('carStatus').style.display = 'none';
-  // Make sure card is showing front
   if (flipped) flipCard();
 }
 
 function carAdvance() {
+  // Resolve the 3-second wait immediately so the old cycle can exit cleanly
   clearTimeout(carLoopTimer);
+  if (carLoopResolve) { carLoopResolve(); carLoopResolve = null; }
   window.speechSynthesis.cancel();
   if (currentIndex < filteredWords.length - 1) {
     currentIndex++;
     showCard();
-    runCarCycle();
+    runCarCycle();   // increments carCycleId — old cycle's alive() checks will now fail
   } else {
     stopCarMode();
     showDone();
@@ -1145,50 +1146,66 @@ function carAdvance() {
 }
 
 async function runCarCycle() {
-  if (!carModeActive) return;
-  const w = filteredWords[currentIndex];
+  // Each call gets a unique ID. Before every async step we verify we're still the active cycle.
+  const myId  = ++carCycleId;
+  const alive = () => carModeActive && carCycleId === myId;
+  const pause = ms => new Promise(r => setTimeout(r, ms));
 
-  // Make sure card is on the front
+  if (!alive()) return;
+
+  // Snapshot word data NOW — never read filteredWords[currentIndex] after an await
+  const w       = filteredWords[currentIndex];
+  const german  = w.german  || '';
+  const english = w.english || '';
+
+  // Ensure card shows front
   if (flipped) {
     document.getElementById('flashcard').classList.remove('flipped');
     document.getElementById('btnSound').style.display = 'inline-flex';
     flipped = false;
   }
 
-  // — Speak English word —
-  setCarStatus('🇺🇸 ' + w.english);
-  await carSpeak(w.english, 'en-US', 0.88);
-  if (!carModeActive) return;
-  await carWait(600);
-  if (!carModeActive) return;
+  // — English word —
+  if (!alive()) return;
+  setCarStatus('🇺🇸 ' + english);
+  await carSpeak(english, 'en-US', 0.88);
+  if (!alive()) return;
+  await pause(600);
 
-  // — Speak definition (if loaded) —
+  // — Definition —
+  if (!alive()) return;
   const defText = document.getElementById('cardDefinition').textContent.trim();
   if (defText) {
     setCarStatus('📖 ' + defText);
     await carSpeak(defText, 'en-US', 0.88);
-    if (!carModeActive) return;
-    await carWait(600);
-    if (!carModeActive) return;
+    if (!alive()) return;
+    await pause(600);
   }
 
-  // — Flip card, speak German —
+  // — German word —
+  if (!alive()) return;
   document.getElementById('flashcard').classList.add('flipped');
   document.getElementById('btnSound').style.display = 'none';
   flipped = true;
-  setCarStatus('🇩🇪 ' + (w.german || ''));
-  await carSpeak(w.german || '', 'de-DE', 0.88);
-  if (!carModeActive) return;
+  setCarStatus('🇩🇪 ' + german);
+  await carSpeak(german, 'de-DE', 0.88);
+  if (!alive()) return;
 
-  // — Flip back, wait 3s, then repeat —
-  await carWait(400);
-  if (!carModeActive) return;
+  // — Flip back —
+  await pause(400);
+  if (!alive()) return;
   document.getElementById('flashcard').classList.remove('flipped');
   document.getElementById('btnSound').style.display = 'inline-flex';
   flipped = false;
 
+  // — Wait 3 s then repeat —
   setCarStatus('👂 Say "next" to continue…');
-  carLoopTimer = setTimeout(() => { if (carModeActive) runCarCycle(); }, 3000);
+  await new Promise(resolve => {
+    carLoopResolve = resolve;
+    carLoopTimer   = setTimeout(resolve, 3000);
+  });
+  carLoopResolve = null;
+  if (alive()) runCarCycle();
 }
 
 // Async voice loader — iOS returns empty array from getVoices() until voiceschanged fires
@@ -1229,12 +1246,6 @@ async function carSpeak(text, lang, rate) {
   });
 }
 
-function carWait(ms) {
-  return new Promise(resolve => {
-    if (!carModeActive) { resolve(); return; }
-    carLoopTimer = setTimeout(resolve, ms);
-  });
-}
 
 function setCarStatus(msg) {
   const el = document.getElementById('carStatus');
